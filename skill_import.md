@@ -71,27 +71,31 @@ skills/
 
 ### Step 4: Copy Skills Preserving Plugin Folder Structure
 
-For each discovered skill directory, copy it **in its entirety** (preserving internal structure) into a subdirectory named after the plugin:
+> **CRITICAL — DO NOT FLATTEN:** Skills MUST be nested inside a plugin-named parent folder. The target path is **two levels deep**: `.agents/skills/<PLUGIN>/<SKILL>/`. Do NOT copy skills directly into `.agents/skills/<SKILL>/` — that is wrong.
+
+For each discovered skill directory, copy it **in its entirety** (preserving internal structure) into a subdirectory named after the **plugin**:
 
 ```
 <project-root>/.agents/skills/<plugin-name>/<skill-name>/
 ```
 
-For example, all skills from the `superpowers` plugin go into:
+**Correct examples:**
 ```
-.agents/skills/superpowers/brainstorming/
-.agents/skills/superpowers/systematic-debugging/
-.agents/skills/superpowers/writing-skills/
-...
+.agents/skills/superpowers/brainstorming/SKILL.md          ← CORRECT
+.agents/skills/superpowers/systematic-debugging/SKILL.md   ← CORRECT
+.agents/skills/figma/implement-design/SKILL.md             ← CORRECT
+.agents/skills/claude-md-management/claude-md-improver/SKILL.md ← CORRECT
 ```
 
-And single-skill plugins like `claude-md-management`:
+**Wrong examples (DO NOT DO THIS):**
 ```
-.agents/skills/claude-md-management/claude-md-improver/
+.agents/skills/brainstorming/SKILL.md                      ← WRONG (missing plugin folder)
+.agents/skills/systematic-debugging/SKILL.md               ← WRONG (missing plugin folder)
 ```
 
 **Rules:**
 - **Do NOT modify** any file content — copy everything as-is.
+- **Do NOT flatten** — every skill MUST be inside its plugin's folder.
 - Preserve the full directory tree under each skill (subdirectories, reference files, scripts, etc.).
 - If a skill already exists at the target path, **skip it** unless the user explicitly requests overwriting. Report which skills were skipped.
 - Create the `.agents/skills/<plugin-name>/` directory if it does not exist.
@@ -160,15 +164,16 @@ Total: X skills imported
 
 ## Implementation
 
-Run this shell script from the project root to perform the import:
+Run this shell script **exactly as written** from the project root to perform the import. **Do NOT modify the script** — in particular, do not remove the plugin subfolder logic.
 
 ```bash
 #!/bin/bash
 set -euo pipefail
 
+# === CONFIGURATION ===
 CACHE_DIR="$HOME/.claude/plugins/cache/claude-plugins-official"
-AGENTS_DIR=".agents/skills"
-VSCODE_DIR=".github/instructions"
+AGENTS_DIR=".agents/skills"   # Skills go to: .agents/skills/<PLUGIN>/<SKILL>/
+VSCODE_DIR=".github/instructions"  # VS Code gets: .github/instructions/<PLUGIN>--<SKILL>.md
 
 if [[ ! -d "$CACHE_DIR" ]]; then
   echo "ERROR: Cache directory not found: $CACHE_DIR"
@@ -213,10 +218,11 @@ for plugin_dir in "$CACHE_DIR"/*/; do
   echo ""
   echo "Plugin: $plugin (v$best_version) -> $AGENTS_DIR/$plugin/"
 
-  # Create the plugin subdirectory under .agents/skills/
+  # IMPORTANT: Create the PLUGIN subdirectory under .agents/skills/
+  # Skills are grouped by plugin: .agents/skills/<PLUGIN>/<SKILL>/
   mkdir -p "$AGENTS_DIR/$plugin"
 
-  # Copy each skill directory
+  # Copy each skill directory INTO the plugin folder
   for skill_dir in "$best_version_dir"/skills/*/; do
     [[ -d "$skill_dir" ]] || continue
     skill=$(basename "$skill_dir")
@@ -226,6 +232,7 @@ for plugin_dir in "$CACHE_DIR"/*/; do
       continue
     fi
 
+    # CRITICAL: target is PLUGIN/SKILL, not just SKILL
     target="$AGENTS_DIR/$plugin/$skill"
 
     # Handle existing skill
@@ -258,7 +265,7 @@ echo ""
 echo "=============================="
 echo "Import Complete"
 echo "=============================="
-echo "Total imported: $imported skills to $AGENTS_DIR/"
+echo "Total imported: $imported skills to $AGENTS_DIR/<plugin>/<skill>/"
 echo "VS Code instructions: $vscode_count files written to $VSCODE_DIR/"
 
 if [[ ${#skipped_exists[@]} -gt 0 ]]; then

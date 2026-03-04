@@ -7,6 +7,7 @@ A collection of custom skills I've built for use with AI coding agents (Claude C
 | Skill | Description |
 |-------|-------------|
 | [skill_import.md](skill_import.md) | Imports all Claude Code plugin skills from the local cache into a project, supporting both `.agents/skills/` (Antigravity/Codex) and `.github/instructions/` (VS Code Copilot) formats. |
+| [llm_agnostic_skills.md](llm_agnostic_skills.md) | Converts all local skill files to be LLM-agnostic — removes provider-specific language while preserving the exact original logic, code blocks, and file paths. |
 
 ## How Skills Work
 
