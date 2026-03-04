@@ -1,8 +1,8 @@
-# Skill: Import Claude Code Plugin Skills to Local Antigravity Format
+# Skill: Import Claude Code Plugin Skills to Local Format
 
 ## Description
 
-Automatically imports all skills from the Claude Code plugins cache (`~/.claude/plugins/cache/`) into the local project's `.agents/skills/` directory (Antigravity/Codex format). This copies skill directories — including SKILL.md files and all reference/supporting files — without modifying their content.
+Automatically imports all skills from the Claude Code plugins cache (`~/.claude/plugins/cache/`) into the local project, supporting both **Antigravity/Codex** (`.agents/skills/`) and **VS Code Copilot** (`.github/instructions/`) formats. Skills are grouped under their parent plugin folder, preserving the original directory hierarchy. This copies skill directories — including SKILL.md files and all reference/supporting files — without modifying their content.
 
 ## When to Use
 
@@ -69,25 +69,49 @@ skills/
     └── persuasion-principles.md
 ```
 
-### Step 4: Copy Skills to `.agents/skills/`
+### Step 4: Copy Skills Preserving Plugin Folder Structure
 
-For each discovered skill directory, copy it **in its entirety** (preserving internal structure) to:
+For each discovered skill directory, copy it **in its entirety** (preserving internal structure) into a subdirectory named after the plugin:
 
 ```
-<project-root>/.agents/skills/<skill-name>/
+<project-root>/.agents/skills/<plugin-name>/<skill-name>/
+```
+
+For example, all skills from the `superpowers` plugin go into:
+```
+.agents/skills/superpowers/brainstorming/
+.agents/skills/superpowers/systematic-debugging/
+.agents/skills/superpowers/writing-skills/
+...
+```
+
+And single-skill plugins like `claude-md-management`:
+```
+.agents/skills/claude-md-management/claude-md-improver/
 ```
 
 **Rules:**
 - **Do NOT modify** any file content — copy everything as-is.
 - Preserve the full directory tree under each skill (subdirectories, reference files, scripts, etc.).
-- If a skill with the same name already exists in `.agents/skills/`, **skip it** unless the user explicitly requests overwriting. Report which skills were skipped.
-- Create the `.agents/skills/` directory if it does not exist.
+- If a skill already exists at the target path, **skip it** unless the user explicitly requests overwriting. Report which skills were skipped.
+- Create the `.agents/skills/<plugin-name>/` directory if it does not exist.
+- This structure eliminates naming conflicts since skills are namespaced by plugin.
 
-### Step 5: Handle Naming Conflicts
+### Step 5: Copy Skills for VS Code Copilot Compatibility
 
-If two different plugins provide a skill with the same directory name:
-- Prefix with the plugin name: `.agents/skills/<plugin>--<skill-name>/`
-- Log this to the user so they're aware of the disambiguation.
+In addition to the `.agents/skills/` structure, also copy each skill's `SKILL.md` into the VS Code Copilot custom instructions directory:
+
+```
+<project-root>/.github/instructions/<plugin-name>--<skill-name>.md
+```
+
+VS Code Copilot reads `.md` files from `.github/instructions/` and can auto-attach them as context. Only the `SKILL.md` content is copied (as a flat `.md` file); reference files remain in `.agents/skills/` only.
+
+**Rules:**
+- Create `.github/instructions/` if it does not exist.
+- Name each file `<plugin-name>--<skill-name>.md` to keep them unique and identifiable.
+- If the file already exists, skip it (unless overwrite mode is enabled).
+- Do NOT modify the content of the SKILL.md — copy as-is.
 
 ### Step 6: Report Results
 
@@ -97,8 +121,9 @@ After import, provide a summary:
 Imported Skills Summary
 =======================
 Source: ~/.claude/plugins/cache/claude-plugins-official/
+Targets: .agents/skills/ (Antigravity/Codex) + .github/instructions/ (VS Code Copilot)
 
-Plugin: superpowers (v4.3.1)
+Plugin: superpowers (v4.3.1) -> .agents/skills/superpowers/
   ✓ brainstorming
   ✓ dispatching-parallel-agents
   ✓ executing-plans
@@ -114,21 +139,23 @@ Plugin: superpowers (v4.3.1)
   ✓ writing-plans
   ✓ writing-skills
 
-Plugin: figma (v1.2.0)
+Plugin: figma (v1.2.0) -> .agents/skills/figma/
   ✓ implement-design
   ✓ code-connect-components
   ✓ create-design-system-rules
 
-Plugin: claude-md-management (v1.0.0)
+Plugin: claude-md-management (v1.0.0) -> .agents/skills/claude-md-management/
   ✓ claude-md-improver
 
-Plugin: frontend-design (205b6e0b3036)
+Plugin: frontend-design (205b6e0b3036) -> .agents/skills/frontend-design/
   ✓ frontend-design
+
+VS Code instructions: 19 files written to .github/instructions/
 
 Skipped (already exists): <list any skipped>
 Skipped (no skills): code-simplifier, context7, playwright, pyright-lsp, security-guidance, serena, typescript-lsp
 
-Total: X skills imported to .agents/skills/
+Total: X skills imported
 ```
 
 ## Implementation
@@ -140,19 +167,21 @@ Run this shell script from the project root to perform the import:
 set -euo pipefail
 
 CACHE_DIR="$HOME/.claude/plugins/cache/claude-plugins-official"
-TARGET_DIR=".agents/skills"
+AGENTS_DIR=".agents/skills"
+VSCODE_DIR=".github/instructions"
 
 if [[ ! -d "$CACHE_DIR" ]]; then
   echo "ERROR: Cache directory not found: $CACHE_DIR"
   exit 1
 fi
 
-mkdir -p "$TARGET_DIR"
+mkdir -p "$AGENTS_DIR"
+mkdir -p "$VSCODE_DIR"
 
 imported=0
+vscode_count=0
 skipped_exists=()
 skipped_no_skills=()
-conflicts=()
 
 for plugin_dir in "$CACHE_DIR"/*/; do
   plugin=$(basename "$plugin_dir")
@@ -182,7 +211,10 @@ for plugin_dir in "$CACHE_DIR"/*/; do
   fi
 
   echo ""
-  echo "Plugin: $plugin (v$best_version)"
+  echo "Plugin: $plugin (v$best_version) -> $AGENTS_DIR/$plugin/"
+
+  # Create the plugin subdirectory under .agents/skills/
+  mkdir -p "$AGENTS_DIR/$plugin"
 
   # Copy each skill directory
   for skill_dir in "$best_version_dir"/skills/*/; do
@@ -194,26 +226,31 @@ for plugin_dir in "$CACHE_DIR"/*/; do
       continue
     fi
 
-    target="$TARGET_DIR/$skill"
+    target="$AGENTS_DIR/$plugin/$skill"
 
     # Handle existing skill
     if [[ -d "$target" ]]; then
-      skipped_exists+=("$skill")
-      echo "  ⏭ $skill (already exists, skipped)"
-      continue
-    fi
-
-    # Handle naming conflicts (same skill name from different plugin)
-    if [[ -d "$TARGET_DIR/$skill" ]]; then
-      target="$TARGET_DIR/${plugin}--${skill}"
-      conflicts+=("$skill -> ${plugin}--${skill}")
-      echo "  ⚠ $skill (conflict, imported as ${plugin}--${skill})"
+      if [[ "${OVERWRITE:-0}" == "1" ]]; then
+        rm -rf "$target"
+        echo "  ↻ $skill (overwritten)"
+      else
+        skipped_exists+=("$plugin/$skill")
+        echo "  ⏭ $skill (already exists, skipped)"
+        continue
+      fi
     fi
 
     # Copy the entire skill directory preserving structure
     cp -R "$skill_dir" "$target"
     echo "  ✓ $skill"
     ((imported++))
+
+    # Also copy SKILL.md to .github/instructions/ for VS Code Copilot
+    vscode_file="$VSCODE_DIR/${plugin}--${skill}.md"
+    if [[ ! -f "$vscode_file" ]] || [[ "${OVERWRITE:-0}" == "1" ]]; then
+      cp "$skill_dir/SKILL.md" "$vscode_file"
+      ((vscode_count++))
+    fi
   done
 done
 
@@ -221,8 +258,8 @@ echo ""
 echo "=============================="
 echo "Import Complete"
 echo "=============================="
-echo "Total imported: $imported skills"
-echo "Target: $TARGET_DIR/"
+echo "Total imported: $imported skills to $AGENTS_DIR/"
+echo "VS Code instructions: $vscode_count files written to $VSCODE_DIR/"
 
 if [[ ${#skipped_exists[@]} -gt 0 ]]; then
   echo ""
@@ -233,41 +270,52 @@ if [[ ${#skipped_no_skills[@]} -gt 0 ]]; then
   echo ""
   echo "Skipped (no skills): ${skipped_no_skills[*]}"
 fi
-
-if [[ ${#conflicts[@]} -gt 0 ]]; then
-  echo ""
-  echo "Naming conflicts resolved:"
-  for c in "${conflicts[@]}"; do
-    echo "  $c"
-  done
-fi
 ```
 
 ## Overwrite Mode
 
-If the user requests overwriting existing skills, modify the behavior:
-- Instead of skipping when a skill directory already exists, **remove the existing directory first** and replace it with the fresh copy from the cache.
-- Clearly report which skills were overwritten.
-
-To enable overwrite mode, pass `--overwrite` or set `OVERWRITE=1`:
+Overwrite mode is built into the main script. To enable it, set `OVERWRITE=1`:
 
 ```bash
-OVERWRITE=1 bash -c '<script above with overwrite logic>'
+OVERWRITE=1 bash import-skills.sh
 ```
 
-In overwrite mode, replace the skip block with:
+When enabled:
+- Existing skill directories in `.agents/skills/<plugin>/<skill>/` are removed and replaced with the fresh copy.
+- Existing VS Code instruction files in `.github/instructions/` are also overwritten.
+- Overwritten skills are reported with `↻` in the output.
 
-```bash
-if [[ -d "$target" ]]; then
-  if [[ "${OVERWRITE:-0}" == "1" ]]; then
-    rm -rf "$target"
-    echo "  ↻ $skill (overwritten)"
-  else
-    skipped_exists+=("$skill")
-    echo "  ⏭ $skill (already exists, skipped)"
-    continue
-  fi
-fi
+## Output Structure
+
+After running the import, the project will contain:
+
+```
+<project-root>/
+├── .agents/skills/                          # Antigravity/Codex format (full skill dirs)
+│   ├── superpowers/
+│   │   ├── brainstorming/
+│   │   │   └── SKILL.md
+│   │   ├── systematic-debugging/
+│   │   │   ├── SKILL.md
+│   │   │   ├── defense-in-depth.md
+│   │   │   └── find-polluter.sh
+│   │   └── writing-skills/
+│   │       ├── SKILL.md
+│   │       └── examples/
+│   ├── figma/
+│   │   ├── implement-design/
+│   │   └── code-connect-components/
+│   ├── claude-md-management/
+│   │   └── claude-md-improver/
+│   └── frontend-design/
+│       └── frontend-design/
+├── .github/instructions/                    # VS Code Copilot format (flat SKILL.md copies)
+│   ├── superpowers--brainstorming.md
+│   ├── superpowers--systematic-debugging.md
+│   ├── superpowers--writing-skills.md
+│   ├── figma--implement-design.md
+│   ├── claude-md-management--claude-md-improver.md
+│   └── frontend-design--frontend-design.md
 ```
 
 ## Notes
@@ -276,3 +324,5 @@ fi
 - Skills are copied verbatim — no frontmatter is rewritten, no paths are adjusted. The `.agents/skills/` convention uses the same `SKILL.md` format.
 - Some skills reference sibling files (e.g., `systematic-debugging` references `defense-in-depth.md`). These are preserved because the entire skill directory is copied.
 - Plugins without a `skills/` directory (e.g., MCP-only plugins like `context7`, `playwright`) are automatically skipped.
+- **VS Code Copilot** picks up `.github/instructions/*.md` files as custom instructions. These can be auto-attached to chat contexts or referenced manually. Only the `SKILL.md` content is copied there (not reference files) since VS Code reads flat markdown.
+- **Antigravity/Codex** uses the full `.agents/skills/<plugin>/<skill>/` structure with all supporting files intact.
