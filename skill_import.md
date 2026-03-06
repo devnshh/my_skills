@@ -29,8 +29,12 @@ For each plugin directory, identify the **latest non-orphaned** version:
 
 1. List all version subdirectories inside the plugin folder.
 2. **Exclude** any version that contains an `.orphaned_at` file — these are stale/replaced versions.
-3. From the remaining (non-orphaned) versions, pick the one to use. If multiple non-orphaned versions exist, prefer the one with the highest semver, or the most recently modified directory for hash-based versions.
+3. From the remaining (non-orphaned) versions, pick the one to use:
+  - If any version names are valid semver (for example `1.2.0`), choose the highest semver.
+  - If none are semver (for example hash-like directory names), choose the most recently modified directory.
 4. If **no** non-orphaned version has skills (i.e., no `skills/` subdirectory containing a `SKILL.md`), skip this plugin entirely.
+
+Important implementation detail: do not just take the last directory returned by shell globbing; directory order is not guaranteed to match semver recency.
 
 ### Step 3: Discover Skills Within Each Plugin Version
 
@@ -169,6 +173,22 @@ set -euo pipefail
 CACHE_DIR="$HOME/.claude/plugins/cache/claude-plugins-official"
 AGENTS_DIR=".agents/skills"
 VSCODE_DIR=".github/instructions"
+PROJECT_ROOT="$(pwd)"
+
+cleaned_zsh=0
+
+cleanup_leftover_zsh() {
+  # Some terminal/tooling flows may leave an accidental .zsh file in project root.
+  local leftover="$PROJECT_ROOT/.zsh"
+  if [[ -f "$leftover" ]] || [[ -L "$leftover" ]]; then
+    rm -f "$leftover"
+    cleaned_zsh=1
+  fi
+}
+
+# Cleanup once before work starts and once on exit.
+cleanup_leftover_zsh
+trap cleanup_leftover_zsh EXIT
 
 if [[ ! -d "$CACHE_DIR" ]]; then
   echo "ERROR: Cache directory not found: $CACHE_DIR"
@@ -183,16 +203,21 @@ vscode_count=0
 skipped_exists=()
 skipped_no_skills=()
 
+is_semver() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
 for plugin_dir in "$CACHE_DIR"/*/; do
+  [[ -d "$plugin_dir" ]] || continue
   plugin=$(basename "$plugin_dir")
 
-  # Find the latest non-orphaned version
-  best_version=""
-  best_version_dir=""
+  # Build candidate list of non-orphaned versions that actually contain SKILL.md files.
+  semver_candidates=()
+  hash_candidates=()
 
   for version_dir in "$plugin_dir"*/; do
     [[ -d "$version_dir" ]] || continue
-    version=$(basename "$version_dir")
+    version=$(basename "${version_dir%/}")
     [[ "$version" == ".DS_Store" ]] && continue
 
     # Skip orphaned versions
@@ -200,10 +225,24 @@ for plugin_dir in "$CACHE_DIR"/*/; do
 
     # Check if this version has skills
     if [[ -d "$version_dir/skills" ]] && find "$version_dir/skills" -name "SKILL.md" -type f 2>/dev/null | grep -q .; then
-      best_version="$version"
-      best_version_dir="$version_dir"
+      if is_semver "$version"; then
+        semver_candidates+=("$version")
+      else
+        hash_candidates+=("$version_dir")
+      fi
     fi
   done
+
+  best_version=""
+  best_version_dir=""
+
+  if [[ ${#semver_candidates[@]} -gt 0 ]]; then
+    best_version=$(printf '%s\n' "${semver_candidates[@]}" | sort -V | tail -n 1)
+    best_version_dir="$plugin_dir$best_version/"
+  elif [[ ${#hash_candidates[@]} -gt 0 ]]; then
+    best_version_dir=$(ls -td "${hash_candidates[@]}" | head -n 1)
+    best_version=$(basename "${best_version_dir%/}")
+  fi
 
   if [[ -z "$best_version_dir" ]]; then
     skipped_no_skills+=("$plugin")
@@ -236,21 +275,20 @@ for plugin_dir in "$CACHE_DIR"/*/; do
       else
         skipped_exists+=("$plugin/$skill")
         echo "  ⏭ $skill (already exists, skipped)"
-        continue
       fi
+    else
+      # Copy the entire skill directory preserving structure
+      cp -R "$skill_dir" "$target"
+      echo "  ✓ $skill"
+      ((imported++))
     fi
 
-    # Copy the entire skill directory preserving structure
-    cp -R "$skill_dir" "$target"
-    echo "  ✓ $skill"
-    ((imported++))
-
-    # Also copy SKILL.md to .github/instructions/ for VS Code Copilot
+    # Always ensure VS Code instruction exists, even if skill directory was skipped.
     vscode_file="$VSCODE_DIR/${plugin}--${skill}.md"
     if [[ ! -f "$vscode_file" ]] || [[ "${OVERWRITE:-0}" == "1" ]]; then
       cp "$skill_dir/SKILL.md" "$vscode_file"
       ((vscode_count++))
-    fi
+      fi
   done
 done
 
@@ -270,6 +308,22 @@ if [[ ${#skipped_no_skills[@]} -gt 0 ]]; then
   echo ""
   echo "Skipped (no skills): ${skipped_no_skills[*]}"
 fi
+
+if [[ "$cleaned_zsh" == "1" ]]; then
+  echo ""
+  echo "Cleanup: removed leftover .zsh file from project root"
+fi
+```
+
+Recommended execution pattern (more reliable than very long inline terminal pastes):
+
+```bash
+cat > import-skills.sh <<'EOF'
+#!/bin/bash
+# paste script here
+EOF
+chmod +x import-skills.sh
+./import-skills.sh
 ```
 
 ## Overwrite Mode
@@ -326,3 +380,4 @@ After running the import, the project will contain:
 - Plugins without a `skills/` directory (e.g., MCP-only plugins like `context7`, `playwright`) are automatically skipped.
 - **VS Code Copilot** picks up `.github/instructions/*.md` files as custom instructions. These can be auto-attached to chat contexts or referenced manually. Only the `SKILL.md` content is copied there (not reference files) since VS Code reads flat markdown.
 - **Antigravity/Codex** uses the full `.agents/skills/<plugin>/<skill>/` structure with all supporting files intact.
+- The script automatically removes a leftover `.zsh` file if one exists in the project root.
